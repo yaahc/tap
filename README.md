@@ -1,75 +1,203 @@
-# tap
+<div class="title-block" style="text-align: center;" align="center">
 
-[![Documentation][docs-shield]][docs]
-[![crates.io version][crate-shield]][crate]
-[![Language (Rust)][rust-shield]][rust]
+# `tap` <!-- omit in toc -->
 
-A simple crate exposing tapping functionality for all types, and extended
-functionality for `Option`, `Result` & `Future`. Often useful for logging.
+## Suffix-Position Pipeline Behavior <!-- omit in toc -->
 
-The tap operation takes, and then returns, full ownership of the variable being
-tapped. This means that the closure may have mutable access to the variable,
-even if the variable was previously immutable.  This prevents accidental mutation.
+[![Crate][crate_img]][crate]
+[![Documentation][docs_img]][docs]
+[![License][license_img]][license_file]
 
-## Features
+[![Crate Downloads][downloads_img]][crate]
+[![Crate Size][loc_img]][loc]
 
-* `future` - Exposes the `TapFutureOps` trait, providing `tap_ready`,
-  `tap_not_ready` & `tap_err` (requires the *futures* crate).
+</div>
 
-  Futures do not provide mutable access for tap closures.
+This crate provides extension methods on all types that allow transparent,
+temporary, inspection/mutation (tapping), transformation (piping), or type
+conversion. These methods make it convenient for you to insert debugging or
+modification points into an expression without requiring you to change any other
+portions of your code.
 
-* `nom3` - Exposes the `TapNomOps` trait, which provides `tap_done`,
-  `tap_error`, and `tap_incomplete` on their respective variants of
-  `nom::IResult`.
+## Example Use
 
-## Example
+### Tapping
+
+You can tap inside a method-chain expression for logging without requiring a
+rebind. For instance, you may write a complex expression without any
+intermediate debugging steps, and only later decide that you want them.
+Ordinarily, this transform would look like this:
 
 ```rust
-extern crate tap;
+extern crate reqwest;
+extern crate tracing;
 
-use tap::*;
+// old
+let body = reqwest::blocking::get("https://example.com")?
+  .text()?;
+tracing::debug!("Response contents: {}", body);
 
-fn filter_map() {
-    let values: &[Result<i32, &str>] = &[Ok(3), Err("foo"), Err("bar"), Ok(8)];
-
-    let _ = values.iter().filter_map(|result| {
-        // It is especially useful in filter maps, allowing error information to
-        // be logged/printed before the information is discarded.
-        result.tap_err(|error| eprintln!("Invalid entry: {}", error)).ok()
-    });
-}
-
-fn basic() {
-    let mut foo = 5;
-
-    // The `tap` extension can be used on all types
-    if 10.tap(|v| foo += *v) > 0 {
-        assert_eq!(foo, 15);
-    }
-
-    // Results have `tap_err` & `tap_ok` available.
-    let _: Result<i32, i32> = Err(5).tap_err(|e| foo = *e);
-    assert_eq!(foo, 5);
-
-    // Options have `tap_some` & `tap_none` available.
-    let _: Option<i32> = None.tap_none(|| foo = 10);
-    assert_eq!(foo, 10);
-}
-
-fn mutable() {
-    let base = [1, 2, 3];
-    let mutated = base.tap(|arr| for elt in arr.iter_mut() {
-        *elt *= 2;
-    });
-    // base was consumed and is out of scope.
-    assert_eq!(mutated, [2, 4, 6]);
-}
+// new, with debugging
+let resp = reqwest::blocking::get("https://example.com")?;
+tracing::debug!("Response status: {}", resp.status());
+let body = resp.text()?;
+tracing::debug!("Response contents: {}", body);
 ```
 
-<!-- Links -->
-[crate-shield]: https://img.shields.io/crates/v/tap.svg?style=flat-square
-[crate]: https://crates.io/crates/tap
-[rust-shield]: https://img.shields.io/badge/powered%20by-rust-blue.svg?style=flat-square
-[rust]: https://www.rust-lang.org
-[docs-shield]: https://img.shields.io/badge/docs-latest-green.svg?style=flat-square
-[docs]: https://docs.rs/tap
+while with tapping, you can plug the logging statement directly into the overall
+expression, without making any other changes:
+
+```rust
+extern crate reqwest;
+extern crate tracing;
+
+let body = reqwest::blocking::get("https://example.com")?
+  // The only change is the insertion of this line
+  .tap(|resp| tracing::debug!("Response status: {}", resp.status()))
+  .text()?;
+tracing::debug!("Response contents: {}", body);
+```
+
+### Mutable Tapping
+
+Some APIs are written to require mutable borrows, rather than value-to-value
+transformations, which can require temporary rebinding in order to create
+mutability in an otherwise-immutable context. For example, collecting data into
+a vector, sorting the vector, and then freezing it, might look like this:
+
+```rust
+let mut collection = stream().collect::<Vec<_>>();
+collection.sort();
+// potential error site: inserting other mutations here
+let collection = collection; // now immutable
+```
+
+But with a mutable tap, you can avoid the duplicate binding *and* guard against
+future errors due to the presence of a mutable binding:
+
+```rust
+let collection = stream.collect::<Vec<_>>()
+  .tap_mut(|v| v.sort());
+```
+
+The `.tap_mut()` and related methods provide a mutable borrow to their argument,
+and allow the final binding site to choose their own level of mutability without
+exposing the intermediate permission.
+
+### Piping
+
+In addition to transparent inspection or modification points, you may also wish
+to use suffix calls for subsequent operations. For example, the standard library
+offers the free function `fs::read` to convert `Path`-like objects into
+`Vec<u8>` of their filesystem contents. Ordinarily, free functions require use
+as:
+
+```rust
+use std::fs;
+
+let mut path = get_base_path();
+path.push("logs");
+path.push(&format!("{}.log", today()));
+let contents = fs::read(path)?;
+```
+
+whereäs use of tapping (for path modification) and piping (for `fs::read`) could
+be expressed like this:
+
+```rust
+use std::fs;
+
+let contents = get_base_path()
+  .tap_mut(|p| p.push("logs"))
+  .tap_mut(|p| p.push(&format!("{}.log", today())))
+  .pipe(fs::read)?;
+```
+
+As a clearer example, consider the syntax required to apply multiple free
+funtions without `let`-bindings looks like this:
+
+```rust
+let val = last(
+  third(
+    second(
+      first(original_value),
+      another_arg,
+    )
+  ),
+  another_arg,
+);
+```
+
+which requires reading the expression in alternating, inside-out, order, to
+understand the full sequence of evaluation. With suffix calls, even free
+functions can be written in a point-free style that maintains a clear temporal
+and syntactic order:
+
+```rust
+let val = original_value
+  .pipe(first)
+  .pipe(|v| second(v, another_arg))
+  .pipe(third)
+  .pipe(|v| last(v, another_arg));
+```
+
+As piping is an ordinary method, not a syntax transformation, it still requires
+that you write function-call expressions when using a function with multiple
+arguments in the pipeline.
+
+### Conversion
+
+The `conv` module is the simplest: it provides two traits, `Conv` and `TryConv`,
+which are sibling traits to `Into<T>` and `TryInto<T>`. Their methods,
+`Conv::conv::<T>` and `TryConv::try_conv::<T>`, call the corresponding
+trait implementation, and allow you to use `.into()`/`.try_into()` in
+non-terminal method calls of an expression.
+
+```rust
+let bytes = "hello".into().into_bytes();
+```
+
+does not compile, because Rust cannot decide the type of `"hello".into()`.
+Instead of rewriting the expression to use an intermediate `let` binding, you
+can write it as
+
+```rust
+let bytes = "hello".conv::<String>().into_bytes();
+```
+
+## Full Functionality
+
+The `Tap` and `Pipe` traits both provide a large number of methods, which use
+different parts of the Rust language’s facilities for well-typed value access.
+Rather than repeat the API documentation here, you should view the module items
+in the [documentation][docs].
+
+As a summary, these traits provide methods that, upon receipt of a value,
+
+- apply no transformation
+- apply an `AsRef` or `AsMut` implementation
+- apply a `Borrow` or `BorrowMut` implementation
+- apply the `Deref` or `DerefMut` implementation
+
+before executing their effect argument.
+
+In addition, each `Tap` method `.tap_x` has a sibling method `.tap_x_dbg` that
+performs the same work, but only in debug builds; in release builds, the method
+call is stripped. This allows you to leave debugging taps in your source code,
+without affecting your project’s performance in true usage.
+
+Lastly, the `tap` module also has traits `TapOptional` and `TapFallible` which
+run taps on the variants of `Option` and `Result` enums, respectively, and do
+nothing when the variant does not match the method name. `TapOptional::tap_some`
+has no effect when called on a `None`, etc.
+
+<!-- Badges -->
+[crate]: https://crates.io/crates/tap "Crate Link"
+[crate_img]: https://img.shields.io/crates/v/tap.svg?logo=rust "Crate Page"
+[docs]: https://docs.rs/tap "Documentation"
+[docs_img]: https://docs.rs/tap/badge.svg "Documentation Display"
+[downloads_img]: https://img.shields.io/crates/dv/tap.svg?logo=rust "Crate Downloads"
+[license_file]: https://github.com/myrrlyn/tap/blob/master/LICENSE.txt "License File"
+[license_img]: https://img.shields.io/crates/l/tap.svg "License Display"
+[loc]: https://github.com/myrrlyn/tap "Repository"
+[loc_img]: https://tokei.rs/b1/github/myrrlyn/tap?category=code "Repository Size"
