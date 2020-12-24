@@ -11,7 +11,9 @@ description = "Generic extensions for tapping values in Rust"
 documentation = "https://docs.rs/tap"
 homepage = "https://github.com/myrrlyn/tap"
 include = [
-	"cargo.toml",
+	"Cargo.toml",
+	"README.md",
+	"LICENSE.txt",
 	"src/**/*.rs",
 ]
 keywords = [
