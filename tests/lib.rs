@@ -1,3 +1,4 @@
+#![feature(exhaustive_patterns)]
 extern crate tap;
 
 use tap::prelude::*;
@@ -9,7 +10,7 @@ fn filter_map() {
 		// It is especially useful in filter maps, allowing error information to
 		// be logged/printed before the information is discarded.
 		result
-			.tap_err(|error| println!("Invalid entry: {}", error))
+			.tap_break(|Err(error)| println!("Invalid entry: {}", error))
 			.ok()
 	});
 }
@@ -23,11 +24,11 @@ fn basic() {
 		assert_eq!(val, 15);
 	}
 
-	// Results have `tap_err` & `tap_ok` available.
-	let _: Result<i32, i32> = Err(5).tap_err(|e| val = *e);
+	// Results have `tap_break` & `tap_ok` available.
+	let _: Result<i32, i32> = Err(5).tap_break(|Err(e)| val = *e);
 	assert_eq!(val, 5);
 
 	// Options have `tap_some` & `tap_none` available.
-	let _: Option<i32> = None.tap_none(|| val = 10);
+	let _: Option<i32> = None.tap_break(|None| val = 10);
 	assert_eq!(val, 10);
 }

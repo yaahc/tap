@@ -1,3 +1,4 @@
+#![feature(try_trait_v2)]
 /*! # `tap` – Syntactical Plumb-Lines
 
 Rust permits functions that take a `self` receiver to be written in “dot-call”

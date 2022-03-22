@@ -31,7 +31,7 @@ make_vec().tap_deref_mut(<[_]>::sort);
 // make_vec().tap_mut(Vec::sort);
 ```
 !*/
-
+use core::ops::{ControlFlow, Try};
 use core::{
 	borrow::{Borrow, BorrowMut},
 	ops::{Deref, DerefMut},
@@ -328,120 +328,6 @@ where
 
 impl<T> Tap for T where T: Sized {}
 
-/** Optional tapping, conditional on the optional presence of a value.
-
-This trait is intended for use on types that express the concept of “optional
-presence”, primarily the [`Option`] monad. It provides taps that inspect the
-container to determine if the effect function should execute or not.
-
-> Note: This trait is a specialization of [`TapFallible`], and exists because
-> the [`std::ops::Try`] trait is still unstable. When `Try` stabilizes, this
-> trait can be removed, and `TapFallible` blanket-applied to all `Try`
-> implementors.
-
-[`Option`]: https://doc.rust-lang.org/std/option/enum.Option.html
-[`TapFallible`]: trait.TapFallible.html
-[`std::ops::Try`]: https://doc.rust-lang.org/std/ops/trait.Try.html
-**/
-pub trait TapOptional
-where
-	Self: Sized,
-{
-	/// The interior type that the container may or may not carry.
-	type Val: ?Sized;
-
-	/// Immutabily accesses an interior value only when it is present.
-	///
-	/// This function is identical to [`Tap::tap`], except that it is required
-	/// to check the implementing container for value presence before running.
-	/// Implementors must not run the effect function if the container is marked
-	/// as being empty.
-	///
-	/// [`Tap::tap`]: trait.Tap.html#method.tap
-	fn tap_some(self, func: impl FnOnce(&Self::Val)) -> Self;
-
-	/// Mutably accesses an interor value only when it is present.
-	///
-	/// This function is identical to [`Tap::tap_mut`], except that it is
-	/// required to check the implementing container for value presence before
-	/// running. Implementors must not run the effect function if the container
-	/// is marked as being empty.
-	///
-	/// [`Tap::tap_mut`]: trait.Tap.html#method.tap_mut
-	fn tap_some_mut(self, func: impl FnOnce(&mut Self::Val)) -> Self;
-
-	/// Runs an effect function when the container is empty.
-	///
-	/// This function is identical to [`Tap::tap`], except that it is required
-	/// to check the implementing container for value absence before running.
-	/// Implementors must not run the effect function if the container is marked
-	/// as being non-empty.
-	///
-	/// [`Tap::tap`]: trait.Tap.html#method.tap
-	fn tap_none(self, func: impl FnOnce()) -> Self;
-
-	/// Calls `.tap_some()` only in debug builds, and is erased in release
-	/// builds.
-	#[inline(always)]
-	fn tap_some_dbg(self, func: impl FnOnce(&Self::Val)) -> Self {
-		if cfg!(debug_assertions) {
-			self.tap_some(func)
-		} else {
-			self
-		}
-	}
-
-	/// Calls `.tap_some_mut()` only in debug builds, and is erased in release
-	/// builds.
-	#[inline(always)]
-	fn tap_some_mut_dbg(self, func: impl FnOnce(&mut Self::Val)) -> Self {
-		if cfg!(debug_assertions) {
-			self.tap_some_mut(func)
-		} else {
-			self
-		}
-	}
-
-	/// Calls `.tap_none()` only in debug builds, and is erased in release
-	/// builds.
-	#[inline(always)]
-	fn tap_none_dbg(self, func: impl FnOnce()) -> Self {
-		if cfg!(debug_assertions) {
-			self.tap_none(func)
-		} else {
-			self
-		}
-	}
-}
-
-impl<T> TapOptional for Option<T> {
-	type Val = T;
-
-	#[inline(always)]
-	fn tap_some(self, func: impl FnOnce(&T)) -> Self {
-		if let Some(ref val) = self {
-			func(val);
-		}
-		self
-	}
-
-	#[inline(always)]
-	fn tap_some_mut(mut self, func: impl FnOnce(&mut T)) -> Self {
-		if let Some(ref mut val) = self {
-			func(val);
-		}
-		self
-	}
-
-	#[inline(always)]
-	fn tap_none(self, func: impl FnOnce()) -> Self {
-		if self.is_none() {
-			func();
-		}
-		self
-	}
-}
-
 /** Fallible tapping, conditional on the optional success of an expression.
 
 This trait is intended for use on types that express the concept of “fallible
@@ -457,14 +343,8 @@ container to determine if the effect function should execute or not.
 **/
 pub trait TapFallible
 where
-	Self: Sized,
+	Self: Sized + Try,
 {
-	/// The interior type used to indicate a successful construction.
-	type Ok: ?Sized;
-
-	/// The interior type used to indicate a failed construction.
-	type Err: ?Sized;
-
 	/// Immutably accesses an interior success value.
 	///
 	/// This function is identical to [`Tap::tap`], except that it is required
@@ -473,7 +353,7 @@ where
 	/// as being a failure.
 	///
 	/// [`Tap::tap`]: trait.Tap.html#method.tap
-	fn tap_ok(self, func: impl FnOnce(&Self::Ok)) -> Self;
+	fn tap_continue(self, func: impl FnOnce(&Self::Output)) -> Self;
 
 	/// Mutably accesses an interior success value.
 	///
@@ -483,7 +363,7 @@ where
 	/// is marked as being a failure.
 	///
 	/// [`Tap::tap_mut`]: trait.Tap.html#method.tap_mut
-	fn tap_ok_mut(self, func: impl FnOnce(&mut Self::Ok)) -> Self;
+	fn tap_continue_mut(self, func: impl FnOnce(&mut Self::Output)) -> Self;
 
 	/// Immutably accesses an interior failure value.
 	///
@@ -493,7 +373,7 @@ where
 	/// as being a success.
 	///
 	/// [`Tap::tap`]: trait.Tap.html#method.tap
-	fn tap_err(self, func: impl FnOnce(&Self::Err)) -> Self;
+	fn tap_break(self, func: impl FnOnce(&Self::Residual)) -> Self;
 
 	/// Mutably accesses an interior failure value.
 	///
@@ -503,85 +383,97 @@ where
 	/// is marked as being a success.
 	///
 	/// [`Tap::tap_mut`]: trait.Tap.html#method.tap_mut
-	fn tap_err_mut(self, func: impl FnOnce(&mut Self::Err)) -> Self;
+	fn tap_break_mut(self, func: impl FnOnce(&mut Self::Residual)) -> Self;
 
-	/// Calls `.tap_ok()` only in debug builds, and is erased in release builds.
+	/// Calls `.tap_continue()` only in debug builds, and is erased in release builds.
 	#[inline(always)]
-	fn tap_ok_dbg(self, func: impl FnOnce(&Self::Ok)) -> Self {
+	fn tap_continue_dbg(self, func: impl FnOnce(&Self::Output)) -> Self {
 		if cfg!(debug_assertions) {
-			self.tap_ok(func)
+			self.tap_continue(func)
 		} else {
 			self
 		}
 	}
 
-	/// Calls `.tap_ok_mut()` only in debug builds, and is erased in release
+	/// Calls `.tap_continue_mut()` only in debug builds, and is erased in release
 	/// builds.
 	#[inline(always)]
-	fn tap_ok_mut_dbg(self, func: impl FnOnce(&mut Self::Ok)) -> Self {
+	fn tap_continue_mut_dbg(self, func: impl FnOnce(&mut Self::Output)) -> Self {
 		if cfg!(debug_assertions) {
-			self.tap_ok_mut(func)
+			self.tap_continue_mut(func)
 		} else {
 			self
 		}
 	}
 
-	/// Calls `.tap_err()` only in debug builds, and is erased in release
+	/// Calls `.tap_break()` only in debug builds, and is erased in release
 	/// builds.
 	#[inline(always)]
-	fn tap_err_dbg(self, func: impl FnOnce(&Self::Err)) -> Self {
+	fn tap_break_dbg(self, func: impl FnOnce(&Self::Residual)) -> Self {
 		if cfg!(debug_assertions) {
-			self.tap_err(func)
+			self.tap_break(func)
 		} else {
 			self
 		}
 	}
 
-	/// Calls `.tap_err_mut()` only in debug builds, and is erased in release
+	/// Calls `.tap_break_mut()` only in debug builds, and is erased in release
 	/// builds.
 	#[inline(always)]
-	fn tap_err_mut_dbg(self, func: impl FnOnce(&mut Self::Err)) -> Self {
+	fn tap_break_mut_dbg(self, func: impl FnOnce(&mut Self::Residual)) -> Self {
 		if cfg!(debug_assertions) {
-			self.tap_err_mut(func)
+			self.tap_break_mut(func)
 		} else {
 			self
 		}
 	}
 }
 
-impl<T, E> TapFallible for Result<T, E> {
-	type Ok = T;
-	type Err = E;
-
+impl<T> TapFallible for T
+where
+	T: Try,
+{
 	#[inline(always)]
-	fn tap_ok(self, func: impl FnOnce(&T)) -> Self {
-		if let Ok(ref val) = self {
-			func(val);
+	fn tap_continue(self, func: impl FnOnce(&Self::Output)) -> Self {
+		match self.branch() {
+			ControlFlow::Continue(output) => {
+				func(&output);
+				Self::from_output(output)
+			}
+			ControlFlow::Break(residual) => Self::from_residual(residual),
 		}
-		self
 	}
 
 	#[inline(always)]
-	fn tap_ok_mut(mut self, func: impl FnOnce(&mut T)) -> Self {
-		if let Ok(ref mut val) = self {
-			func(val);
+	fn tap_continue_mut(self, func: impl FnOnce(&mut Self::Output)) -> Self {
+		match self.branch() {
+			ControlFlow::Continue(mut output) => {
+				func(&mut output);
+				Self::from_output(output)
+			}
+			ControlFlow::Break(residual) => Self::from_residual(residual),
 		}
-		self
 	}
 
 	#[inline(always)]
-	fn tap_err(self, func: impl FnOnce(&E)) -> Self {
-		if let Err(ref val) = self {
-			func(val);
+	fn tap_break(self, func: impl FnOnce(&Self::Residual)) -> Self {
+		match self.branch() {
+			ControlFlow::Continue(output) => Self::from_output(output),
+			ControlFlow::Break(residual) => {
+				func(&residual);
+				Self::from_residual(residual)
+			}
 		}
-		self
 	}
 
 	#[inline(always)]
-	fn tap_err_mut(mut self, func: impl FnOnce(&mut E)) -> Self {
-		if let Err(ref mut val) = self {
-			func(val);
+	fn tap_break_mut(self, func: impl FnOnce(&mut Self::Residual)) -> Self {
+		match self.branch() {
+			ControlFlow::Continue(output) => Self::from_output(output),
+			ControlFlow::Break(mut residual) => {
+				func(&mut residual);
+				Self::from_residual(residual)
+			}
 		}
-		self
 	}
 }
